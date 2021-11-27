@@ -34,8 +34,13 @@ pub fn create_constrainer(input: proc_macro::TokenStream) -> proc_macro::TokenSt
     };
     // println!("{:#?}", data);
 
-    let mut dynamics: IndexMap<Ident, Dynamic> = IndexMap::new();
-    let mut constraineds: IndexMap<Ident, Constrained> = IndexMap::new();
+    let mut identifiers: IndexMap<Ident, Identifier> = IndexMap::new();
+
+    let mut dynamic_fields = TokenStream::new();
+    let mut constrained_fields = TokenStream::new();
+    let mut deliminated_dynamics = TokenStream::new();
+    let mut deliminated_constraineds = TokenStream::new();
+    let mut init_constraineds = TokenStream::new();
     let mut ops: TokenStream = TokenStream::new();
 
     let mut parse_state = ParseState::Key;
@@ -55,14 +60,20 @@ pub fn create_constrainer(input: proc_macro::TokenStream) -> proc_macro::TokenSt
                 TokenTree::Ident(ty) => {
                     let get_fn_name = Ident::new(&format!("get_{}", name), Span::call_site());
                     ops.append_all(quote! {
-                        pub fn #get_fn_name(&self) -> #ty {
-                            self.#name
+                        pub fn #get_fn_name(&self) -> &#ty {
+                            &self.#name
                         }
                     });
-                    dynamics.insert(name, Dynamic {
-                        ty: ty,
-                        dependents: BTreeSet::new(),
+                    dynamic_fields.append_all(quote! {
+                        #name: #ty,
                     });
+                    deliminated_dynamics.append_all(quote! {
+                        #name,
+                    });
+                    identifiers.insert(name, Identifier::Dynamic(Dynamic {
+                        ty,
+                        dependents: BTreeSet::new(),
+                    }));
                     parse_state = ParseState::Key;
                 },
                 _ => panic!("Unexpected token: {}", token)
@@ -80,30 +91,11 @@ pub fn create_constrainer(input: proc_macro::TokenStream) -> proc_macro::TokenSt
             ParseState::ConstrainedParams(name, ty) => match token {
                 TokenTree::Group(group) if group.delimiter() == Delimiter::Parenthesis => {
                     let mut params = Vec::new();
-                    let mut params_parse_state = ConstrainedParamsParseState::Key;
                     for token in group.stream() {
-                        match params_parse_state {
-                            ConstrainedParamsParseState::Key => match token {
-                                TokenTree::Punct(punct) if punct.as_char() == ',' => {}, // TODO: Remove >1 comma, no comma, and leading comma
-                                TokenTree::Ident(ident) if ident.to_string().as_str() == "dynamic" => params_parse_state = ConstrainedParamsParseState::Name(ConstrainedParamType::Dynamic),
-                                TokenTree::Ident(ident) if ident.to_string().as_str() == "constrained" => params_parse_state = ConstrainedParamsParseState::Name(ConstrainedParamType::Constrained),
-                                _ => panic!("Unexpected token: {}", token)
-                            },
-                            ConstrainedParamsParseState::Name(param_ty) => match token {
-                                TokenTree::Ident(name) => params_parse_state = ConstrainedParamsParseState::Type(param_ty, name),
-                                _ => panic!("Unexpected token: {}", token)
-                            },
-                            ConstrainedParamsParseState::Type(param_ty, name) => match token {
-                                TokenTree::Ident(ty) => {
-                                    params.push(ConstrainedParam {
-                                        param_ty,
-                                        name,
-                                        ty,
-                                    });
-                                    params_parse_state = ConstrainedParamsParseState::Key;
-                                },
-                                _ => panic!("Unexpected token: {}", token)
-                            }
+                        match token {
+                            TokenTree::Punct(punct) if punct.as_char() == ',' => {}, // TODO: Remove >1 comma, no comma, and leading comma
+                            TokenTree::Ident(param) => params.push(param),
+                            _ => panic!("Unexpected token: {}", token)
                         }
                     }
                     parse_state = ParseState::ConstrainedBlock(name, ty, params);
@@ -112,16 +104,15 @@ pub fn create_constrainer(input: proc_macro::TokenStream) -> proc_macro::TokenSt
             },
             ParseState::ConstrainedBlock(name, ty, params) => match token {
                 TokenTree::Group(group) if group.delimiter() == Delimiter::Brace => {
-                    let index = constraineds.len();
+                    let index = identifiers.len();
                     for param in &params {
-                        match param.param_ty {
-                            ConstrainedParamType::Dynamic => {
-                                let dependents = &mut dynamics.get_mut(&param.name).unwrap().dependents;
-                                dependents.insert(index);
+                        let identifier = identifiers.get_mut(param).unwrap();
+                        match identifier {
+                            Identifier::Dynamic(dynamic) => {
+                                dynamic.dependents.insert(index);
                             },
-                            ConstrainedParamType::Constrained => {
-                                let dependents = &mut constraineds.get_mut(&param.name).unwrap().dependents;
-                                dependents.insert(index);
+                            Identifier::Constrained(constrained) => {
+                                constrained.dependents.insert(index);
                             }
                         }
                     }
@@ -129,16 +120,43 @@ pub fn create_constrainer(input: proc_macro::TokenStream) -> proc_macro::TokenSt
                     let get_fn_name = Ident::new(&format!("get_{}", name), Span::call_site());
                     let name_string = name.to_string();
                     ops.append_all(quote! {
-                        pub fn #get_fn_name(&self) -> #ty {
-                            self.#name
+                        pub fn #get_fn_name(&self) -> &#ty {
+                            &self.#name
                         }
                     });
-                    constraineds.insert(name, Constrained::new(
-                        name_string,
+                    constrained_fields.append_all(quote! {
+                        #name: #ty,
+                    });
+                    deliminated_constraineds.append_all(quote! {
+                        #name,
+                    });
+                    let compute_fn_name = Ident::new(&format!("compute_{}", name_string), Span::call_site());
+                    let mut compute_args = TokenStream::new();
+                    let mut init_args = TokenStream::new();
+                    for param in &params {
+                        let ty = match identifiers.get(param).unwrap() {
+                            Identifier::Dynamic(dynamic) => &dynamic.ty,
+                            Identifier::Constrained(constrained) => &constrained.ty,
+                        };
+                        compute_args.append_all(quote! {
+                            #param: #ty,
+                        });
+                        init_args.append_all(quote! {
+                            #param,
+                        });
+                    }
+                    init_constraineds.append_all(quote! {
+                        let #name = Self::#compute_fn_name(#init_args);
+                    });
+                    let block = group.stream();
+                    ops.append_all(quote! { fn #compute_fn_name (#compute_args) -> #ty { #block }});
+                    identifiers.insert(name, Identifier::Constrained(Constrained {
                         ty,
                         params,
-                        group.stream(),
-                    ));
+                        block,
+                        compute_fn_name,
+                        dependents: BTreeSet::new(),
+                    }));
                     parse_state = ParseState::Key;
                 },
                 _ => panic!("Unexpected token: {}", token)
@@ -150,7 +168,15 @@ pub fn create_constrainer(input: proc_macro::TokenStream) -> proc_macro::TokenSt
                         match token {
                             TokenTree::Punct(punct) if punct.as_char() == ',' => {}, // TODO: Remove >1 comma, no comma, and leading comma
                             TokenTree::Ident(ident) => {
-                                set_dynamics.insert(dynamics.get_index_of(&ident).unwrap(), ident);
+                                let index = identifiers.get_index_of(&ident).unwrap();
+                                let key_val = identifiers.get_index(index).unwrap();
+                                let name = key_val.0;
+                                let dynamic = if let Identifier::Dynamic(dynamic) = key_val.1 {
+                                    dynamic
+                                } else {
+                                    panic!("OpGenSet can only take dynamics");
+                                };
+                                set_dynamics.insert(index, (name, dynamic));
                             },
                             _ => panic!("Unexpected token: {}", token)
                         }
@@ -160,65 +186,73 @@ pub fn create_constrainer(input: proc_macro::TokenStream) -> proc_macro::TokenSt
                     }
 
                     let mut set_dynamics_iter = set_dynamics.iter();
-                    let mut fn_name = format!("set_{}", set_dynamics_iter.next().unwrap().1);
-                    for (_, name) in set_dynamics_iter{
+                    let mut fn_name = format!("set_{}", set_dynamics_iter.next().unwrap().1.0);
+                    for (_, (name, _)) in set_dynamics_iter{
                         fn_name.push_str(&format!("_{}", name));
                     }
                     let fn_name = Ident::new(&fn_name, Span::call_site());
 
                     let mut fn_args = TokenStream::new();
+                    let mut fn_block = TokenStream::new();
                     fn_args.append_all(quote! { &mut self, });
-                    for (i, name) in &set_dynamics {
-                        let ty = &dynamics.get_index(*i).unwrap().1.ty;
+                    for (_, (name, dynamic)) in &set_dynamics {
+                        let ty = &dynamic.ty;
                         fn_args.append_all(quote! {
                             #name: #ty,
                         });
-                    }
-
-                    let mut fn_block = TokenStream::new();
-                    for (_, name) in &set_dynamics {
-                        let name = name;
                         fn_block.append_all(quote! {
                             self.#name = #name;
                         });
                     }
                     
-                    let mut to_update = BTreeSet::new();
+                    let mut to_update = BTreeMap::new();
 
-                    for (i, _) in &set_dynamics {
-                        for dependent in &dynamics.get_index(*i).unwrap().1.dependents {
-                            to_update.insert(*dependent);
+                    for (_, (_, dynamic)) in &set_dynamics {
+                        for dependent in &dynamic.dependents {
+                            let constrained = if let (name, Identifier::Constrained(constrained)) = identifiers.get_index(*dependent).unwrap() {
+                                (name, constrained)
+                            } else {
+                                unreachable!()
+                            };
+                            to_update.insert(*dependent, constrained);
                         }
                     }
 
                     let mut last_update_size = to_update.len();
-                    let mut new_updates = BTreeSet::new();
-                    for i in &to_update {
-                        let (_, constrained) = constraineds.get_index(*i).unwrap();
-                        for dependent in &constrained.dependents {
-                            new_updates.insert(*dependent);
+                    let mut new_updates = BTreeMap::new();
+                    for (_, (_, queued)) in &to_update {
+                        for dependent in &queued.dependents {
+                            let constrained = if let (name, Identifier::Constrained(constrained)) = identifiers.get_index(*dependent).unwrap() {
+                                (name, constrained)
+                            } else {
+                                unreachable!()
+                            };
+                            new_updates.insert(*dependent, constrained);
                         }
                     }
                     to_update.append(&mut new_updates);
                     
                     while last_update_size != to_update.len() {
-                        let mut new_updates = BTreeSet::new();
-                        for i in &to_update {
-                            for dependent in &constraineds.get_index(*i).unwrap().1.dependents {
-                                new_updates.insert(*dependent);
+                        let mut new_updates = BTreeMap::new();
+                        for (_, (_, queued)) in &to_update {
+                            for dependent in &queued.dependents {
+                                let constrained = if let (name, Identifier::Constrained(constrained)) = identifiers.get_index(*dependent).unwrap() {
+                                    (name, constrained)
+                                } else {
+                                    unreachable!()
+                                };
+                                new_updates.insert(*dependent, constrained);
                             }
                         }
                         last_update_size = to_update.len();
                         to_update.append(&mut new_updates);
                     }
 
-                    for i in &to_update {
-                        let constrained = constraineds.get_index(*i).unwrap();
-                        let name = &constrained.0;
-                        let compute_fn_name = &constrained.1.compute_fn_name;
+                    for (_, (name, constrained)) in &to_update {
+                        let compute_fn_name = &constrained.compute_fn_name;
                         let mut fn_args = TokenStream::new();
-                        for param in &constrained.1.params {
-                            let name = &param.name;
+                        for param in &constrained.params {
+                            let name = &param;
                             fn_args.append_all(quote! {
                                 self.#name,
                             });
@@ -229,7 +263,7 @@ pub fn create_constrainer(input: proc_macro::TokenStream) -> proc_macro::TokenSt
                     }
 
                     ops.append_all(quote! {
-                        fn #fn_name(#fn_args) {
+                        pub fn #fn_name(#fn_args) {
                             #fn_block
                         }
                     });
@@ -245,94 +279,25 @@ pub fn create_constrainer(input: proc_macro::TokenStream) -> proc_macro::TokenSt
 
     out.append_all(quote! {
         #[derive(Debug)]
-        struct #name
+        struct #name {
+            #dynamic_fields
+            #constrained_fields
+        }
     });
-    let mut fields = TokenStream::new();
-    for (name, dynamic) in &dynamics {
-        let name = name;
-        let ty = &dynamic.ty;
-        fields.append_all(quote! {
-            #name: #ty,
-        });
-    }
-    for (name, constrained) in &constraineds {
-        let name = name;
-        let ty = &constrained.ty;
-        fields.append_all(quote! {
-            #name: #ty,
-        });
-    }
-    out.append(Group::new(Delimiter::Brace, fields));
 
     out.append_all(quote! { impl #name });
-    let mut methods = TokenStream::new();
 
-    methods.append_all(quote! { fn new });
-    let mut new_args = TokenStream::new();
-    for (name, dynamic) in &dynamics {
-        let name = name;
-        let ty = &dynamic.ty;
-        new_args.append_all(quote! {
-            #name: #ty,
-        });
-    }
-    methods.append(Group::new(Delimiter::Parenthesis, new_args));
-    methods.append_all(quote! { -> Self });
-    let mut new_self = TokenStream::new();
-    for (name, constrained) in &constraineds {
-        let name = name;
-        let compute_fn_name = &constrained.compute_fn_name;
-        let mut compute_args = TokenStream::new();
-        for param in &constrained.params {
-            let name = &param.name;
-            compute_args.append_all(quote! {
-                #name,
-            });
-        }
-        new_self.append_all(quote! {
-            let #name = Self::#compute_fn_name(#compute_args);
-        });
-    }
-    let mut new_self_fields = TokenStream::new();
-    for (name, _) in &dynamics {
-        let name = name;
-        new_self_fields.append_all(quote! {
-            #name,
-        });
-    }
-    for (name, _) in &constraineds {
-        let name = name;
-        new_self_fields.append_all(quote! {
-            #name,
-        });
-    }
-    new_self.append_all(quote! {
+    ops.append_all(quote! { pub fn new ( #dynamic_fields ) -> Self {
+        #init_constraineds
+
         Self {
-            #new_self_fields
+            #deliminated_dynamics
+            #deliminated_constraineds
         }
-    });
-    methods.append(Group::new(Delimiter::Brace, new_self));
+    } });
+    out.append(Group::new(Delimiter::Brace, ops));
 
-    for (_, constrained) in &constraineds {
-        let compute_fn_name = &constrained.compute_fn_name;
-        let mut compute_args = TokenStream::new();
-        for param in &constrained.params {
-            let name = &param.name;
-            let ty = &param.ty;
-            compute_args.append_all(quote! {
-                #name: #ty,
-            });
-        }
-        let ty = &constrained.ty;
-        let block = &constrained.block;
-        methods.append_all(quote! { fn #compute_fn_name (#compute_args) -> #ty { #block }});
-    }
-
-    methods.append_all(ops);
-
-    out.append(Group::new(Delimiter::Brace, methods));
-
-    // println!("{:#}", out);
+    println!("{:#}", out);
 
     out.into()
 }
@@ -344,14 +309,13 @@ enum ParseState {
     ConstrainedName,
     ConstrainedType(Ident),
     ConstrainedParams(Ident, Ident),
-    ConstrainedBlock(Ident, Ident, Vec<ConstrainedParam>),
+    ConstrainedBlock(Ident, Ident, Vec<Ident>),
     OpGenSet,
 }
 
-enum ConstrainedParamsParseState {
-    Key,
-    Name(ConstrainedParamType),
-    Type(ConstrainedParamType, Ident),
+enum Identifier {
+    Dynamic(Dynamic),
+    Constrained(Constrained),
 }
 
 struct Dynamic {
@@ -362,33 +326,8 @@ struct Dynamic {
 #[derive(Debug)]
 struct Constrained {
     ty: Ident,
-    params: Vec<ConstrainedParam>,
+    params: Vec<Ident>,
     block: TokenStream,
     compute_fn_name: Ident,
     dependents: BTreeSet<usize>
-}
-
-impl Constrained {
-    fn new(name: String, ty: Ident, params: Vec<ConstrainedParam>, block: TokenStream) -> Self {
-        Self {
-            ty,
-            params,
-            block,
-            compute_fn_name: Ident::new(&format!("compute_{}", name), Span::call_site()),
-            dependents: BTreeSet::new(),
-        }
-    }
-}
-
-#[derive(Debug)]
-struct ConstrainedParam {
-    param_ty: ConstrainedParamType,
-    name: Ident,
-    ty: Ident,
-}
-
-#[derive(Debug)]
-enum ConstrainedParamType {
-    Dynamic,
-    Constrained,
 }

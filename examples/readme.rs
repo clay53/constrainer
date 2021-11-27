@@ -6,10 +6,10 @@ fn compute_y(x: f32) -> f32 {
 
 create_constrainer!(MyConstrainer {
     dynamic x f32
-    constrained y f32 (dynamic x f32) {
+    constrained y f32 (x) {
         compute_y(x)
     }
-    constrained z f32 (dynamic x f32, constrained y f32) {
+    constrained z f32 (x, y) {
         x*y
     }
 });
@@ -18,6 +18,6 @@ fn main() {
     let constrainer_instance = MyConstrainer::new(2.0);
     let y = constrainer_instance.get_y();
     let z = constrainer_instance.get_z();
-    assert_eq!(y, compute_y(2.0));
-    assert_eq!(z, y*2.0);
+    assert_eq!(*y, compute_y(2.0));
+    assert_eq!(*z, y*2.0);
 }

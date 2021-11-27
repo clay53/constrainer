@@ -1,12 +1,12 @@
 # Constrained
-An attempt to bring CAD concepts of constraints to variables in order to signficantly reduce redundant instructions.
+An attempt to bring CAD concepts of constraints to variables in order to significantly reduce redundant instructions.
 
 ## Usage
 create_constrainer! creates a struct that serves as the basis for the "constraining" environment for your constrained variables. The first word (Ident) is the name of your constrainer struct. This can be any valid struct name. Right after, place braces to deliminate the data that will passed to the compiler (proc_macro2) to create your constrainer struct. Inside of the braces, you can define dynamics & constrained variables, and operations those variables can undergo.
 
 Dynamics are defined as follows: `dynamic name type`
 
-Constraineds are defined as follows: `constrained name type (set fn args) { set fn body }`
+Constraineds are defined as follows: `constrained name type (args) { set fn body }`
 
 Variables can be retrieved by calling `.get_{name}` on an instance of your constrainer;
 
@@ -28,10 +28,10 @@ fn compute_y(x: f32) -> f32 {
 
 create_constrainer!(MyConstrainer {
     dynamic x f32
-    constrained y f32 (dynamic x f32) {
+    constrained y f32 (x) {
         compute_y(x)
     }
-    constrained z f32 (dynamic x f32, constrained y f32) {
+    constrained z f32 (x, y) {
         x*y
     }
 });
@@ -40,7 +40,7 @@ fn main() {
     let constrainer_instance = MyConstrainer::new(2.0);
     let y = constrainer_instance.get_y();
     let z = constrainer_instance.get_z();
-    assert_eq!(y, compute_y(2.0));
-    assert_eq!(z, y*2.0);
+    assert_eq!(*y, compute_y(2.0));
+    assert_eq!(*z, y*2.0);
 }
 ```
