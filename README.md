@@ -1,4 +1,6 @@
 [![Rust](https://github.com/clay53/constrained/actions/workflows/rust.yml/badge.svg)](https://github.com/clay53/constrained/actions/workflows/rust.yml)
+[![Crates.io](https://img.shields.io/crates/v/constrainer.svg)](https://crates.io/crates/constrainer)
+[![Docs](https://docs.rs/constrainer/badge.svg)](https://docs.rs/constrainer)
 # Constrainer
 An attempt to bring CAD concepts of constraints to variables in order to significantly reduce redundant instructions.
 
