@@ -1,3 +1,4 @@
+[![Rust](https://github.com/clay53/constrained/actions/workflows/rust.yml/badge.svg)](https://github.com/clay53/constrained/actions/workflows/rust.yml)
 # Constrained
 An attempt to bring CAD concepts of constraints to variables in order to significantly reduce redundant instructions.
 
