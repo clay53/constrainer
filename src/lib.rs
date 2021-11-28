@@ -50,6 +50,7 @@ pub fn create_constrainer(input: proc_macro::TokenStream) -> proc_macro::TokenSt
                 TokenTree::Ident(ident) if ident.to_string().as_str() == "dynamic" => parse_state = ParseState::DynamicName,
                 TokenTree::Ident(ident) if ident.to_string().as_str() == "constrained" => parse_state = ParseState::ConstrainedName,
                 TokenTree::Ident(ident) if ident.to_string().as_str() == "external" => parse_state = ParseState::ExternalName,
+                TokenTree::Ident(ident) if ident.to_string().as_str() == "listener" => parse_state = ParseState::ListenerName,
                 TokenTree::Ident(ident) if ident.to_string().as_str() == "opgenset" => parse_state = ParseState::OpGenSet,
                 _ => panic!("Unexpected token: {}", token)
             },
@@ -106,23 +107,36 @@ pub fn create_constrainer(input: proc_macro::TokenStream) -> proc_macro::TokenSt
             ParseState::ConstrainedBlock(name, ty, params) => match token {
                 TokenTree::Group(group) if group.delimiter() == Delimiter::Brace => {
                     let index = identifiers.len();
+                    let mut compute_args = TokenStream::new();
+                    let mut init_args = TokenStream::new();
                     for param in &params {
                         let identifier = identifiers.get_mut(param).unwrap();
-                        match identifier {
+                        let param_ty = match identifier {
                             Identifier::Dynamic(dynamic) => {
                                 dynamic.dependents.insert(index);
+                                &dynamic.ty
                             },
                             Identifier::Constrained(constrained) => {
                                 constrained.dependents.insert(index);
-                            }
+                                &constrained.ty
+                            },
                             Identifier::External(external) => {
                                 external.dependents.insert(index);
-                            }
-                        }
+                                &external.ty
+                            },
+                            Identifier::Listener(_) => {
+                                panic!("A constrained cannot depend on a listener.");
+                            },
+                        };
+                        compute_args.append_all(quote! {
+                            #param: #param_ty,
+                        });
+                        init_args.append_all(quote! {
+                            #param,
+                        });
                     }
 
                     let get_fn_name = Ident::new(&format!("get_{}", name), Span::call_site());
-                    let name_string = name.to_string();
                     ops.append_all(quote! {
                         pub fn #get_fn_name(&self) -> &#ty {
                             &self.#name
@@ -134,22 +148,7 @@ pub fn create_constrainer(input: proc_macro::TokenStream) -> proc_macro::TokenSt
                     deliminated_constraineds.append_all(quote! {
                         #name,
                     });
-                    let compute_fn_name = Ident::new(&format!("compute_{}", name_string), Span::call_site());
-                    let mut compute_args = TokenStream::new();
-                    let mut init_args = TokenStream::new();
-                    for param in &params {
-                        let ty = match identifiers.get(param).unwrap() {
-                            Identifier::Dynamic(dynamic) => &dynamic.ty,
-                            Identifier::Constrained(constrained) => &constrained.ty,
-                            Identifier::External(external) => &external.ty,
-                        };
-                        compute_args.append_all(quote! {
-                            #param: #ty,
-                        });
-                        init_args.append_all(quote! {
-                            #param,
-                        });
-                    }
+                    let compute_fn_name = Ident::new(&format!("compute_{}", name), Span::call_site());
                     init_constraineds.append_all(quote! {
                         let #name = Self::#compute_fn_name(#init_args);
                     });
@@ -175,12 +174,72 @@ pub fn create_constrainer(input: proc_macro::TokenStream) -> proc_macro::TokenSt
                     external_fields.append_all(quote! {
                         #name: #ty,
                     });
-                    // deliminated_externals.append_all(quote! {
-                    //     #name,
-                    // });
                     identifiers.insert(name, Identifier::External(External {
                         ty,
                         dependents: BTreeSet::new(),
+                    }));
+                    parse_state = ParseState::Key;
+                },
+                _ => panic!("Unexpected token: {}", token)
+            },
+            ParseState::ListenerName => match token {
+                TokenTree::Ident(name) => parse_state = ParseState::ListenerParams(name),
+                _ => panic!("Unexpected token: {}", token)
+            },
+            ParseState::ListenerParams(name) => match token {
+                TokenTree::Group(group) if group.delimiter() == Delimiter::Parenthesis => {
+                    let mut params = Vec::new();
+                    for token in group.stream() {
+                        match token {
+                            TokenTree::Punct(punct) if punct.as_char() == ',' => {}, // TODO: Remove >1 comma, no comma, and leading comma
+                            TokenTree::Ident(param) => params.push(param),
+                            _ => panic!("Unexpected token: {}", token)
+                        }
+                    }
+                    parse_state = ParseState::ListenerBlock(name, params);
+                },
+                _ => panic!("Unexpected token: {}", token)
+            },
+            ParseState::ListenerBlock(listener_fn_name, params) => match token {
+                TokenTree::Group(group) if group.delimiter() == Delimiter::Brace => {
+                    let index = identifiers.len();
+                    let mut listener_args = TokenStream::new();
+                    let mut init_args = TokenStream::new();
+                    for param in &params {
+                        let identifier = identifiers.get_mut(param).unwrap();
+                        let param_ty = match identifier {
+                            Identifier::Dynamic(dynamic) => {
+                                dynamic.dependents.insert(index);
+                                &dynamic.ty
+                            },
+                            Identifier::Constrained(constrained) => {
+                                constrained.dependents.insert(index);
+                                &constrained.ty
+                            },
+                            Identifier::External(external) => {
+                                external.dependents.insert(index);
+                                &external.ty
+                            },
+                            Identifier::Listener(_) => {
+                                panic!("A listener cannot depend on a listener.");
+                            },
+                        };
+                        listener_args.append_all(quote! {
+                            #param: #param_ty,
+                        });
+                        init_args.append_all(quote! {
+                            #param,
+                        });
+                    }
+
+                    init_constraineds.append_all(quote! {
+                        Self::#listener_fn_name(#init_args);
+                    });
+                    let block = group.stream();
+                    ops.append_all(quote! { fn #listener_fn_name (#listener_args) { #block }});
+                    identifiers.insert(listener_fn_name, Identifier::Listener(Listener {
+                        params,
+                        block,
                     }));
                     parse_state = ParseState::Key;
                 },
@@ -231,57 +290,73 @@ pub fn create_constrainer(input: proc_macro::TokenStream) -> proc_macro::TokenSt
                     }
                     
                     let mut to_update = BTreeMap::new();
-
+                    let mut to_call = BTreeMap::new();
+                    let mut found_new_matches = false;
                     for (_, (_, dynamic)) in &set_dynamics {
                         for dependent in &dynamic.dependents {
-                            let constrained = if let (name, Identifier::Constrained(constrained)) = identifiers.get_index(*dependent).unwrap() {
-                                (name, constrained)
-                            } else {
-                                unreachable!()
-                            };
-                            to_update.insert(*dependent, constrained);
+                            match identifiers.get_index(*dependent).unwrap() {
+                                (name, Identifier::Constrained(constrained)) => {
+                                    to_update.insert(*dependent, (name, constrained));
+                                    
+                                },
+                                (name, Identifier::Listener(listener)) => {
+                                    to_call.insert(*dependent, (name, listener));
+                                },
+                                _ => unreachable!()
+                            }
+                            found_new_matches = true;
                         }
                     }
 
-                    let mut last_update_size = to_update.len();
-                    let mut new_updates = BTreeMap::new();
-                    for (_, (_, queued)) in &to_update {
-                        for dependent in &queued.dependents {
-                            let constrained = if let (name, Identifier::Constrained(constrained)) = identifiers.get_index(*dependent).unwrap() {
-                                (name, constrained)
-                            } else {
-                                unreachable!()
-                            };
-                            new_updates.insert(*dependent, constrained);
-                        }
-                    }
-                    to_update.append(&mut new_updates);
-                    
-                    while last_update_size != to_update.len() {
+                    if found_new_matches {
+                        let mut last_updates_and_call_size = to_update.len()+to_call.len();
                         let mut new_updates = BTreeMap::new();
+                        let mut new_calls = BTreeMap::new();
                         for (_, (_, queued)) in &to_update {
                             for dependent in &queued.dependents {
-                                let constrained = if let (name, Identifier::Constrained(constrained)) = identifiers.get_index(*dependent).unwrap() {
-                                    (name, constrained)
-                                } else {
-                                    unreachable!()
-                                };
-                                new_updates.insert(*dependent, constrained);
+                                match identifiers.get_index(*dependent).unwrap() {
+                                    (name, Identifier::Constrained(constrained)) => {
+                                        new_updates.insert(*dependent, (name, constrained));
+                                    },
+                                    (name, Identifier::Listener(listener)) => {
+                                        new_calls.insert(*dependent, (name, listener));
+                                    },
+                                    _ => unreachable!()
+                                }
                             }
                         }
-                        last_update_size = to_update.len();
                         to_update.append(&mut new_updates);
+                        to_call.append(&mut new_calls);
+                        
+                        while last_updates_and_call_size != to_update.len()+to_call.len() {
+                            let mut new_updates = BTreeMap::new();
+                            for (_, (_, queued)) in &to_update {
+                                for dependent in &queued.dependents {
+                                    match identifiers.get_index(*dependent).unwrap() {
+                                        (name, Identifier::Constrained(constrained)) => {
+                                            new_updates.insert(*dependent, (name, constrained));
+                                        },
+                                        (name, Identifier::Listener(listener)) => {
+                                            new_calls.insert(*dependent, (name, listener));
+                                        },
+                                        _ => unreachable!()
+                                    }
+                                }
+                            }
+                            last_updates_and_call_size = to_update.len()+to_call.len();
+                            to_update.append(&mut new_updates);
+                            to_call.append(&mut new_calls);
+                        }
                     }
 
-                    for (_, (name, constrained)) in &to_update {
+                    for (_, (name, constrained)) in to_update {
                         let compute_fn_name = &constrained.compute_fn_name;
                         let mut compute_fn_args = TokenStream::new();
                         for param in &constrained.params {
-                            let name = &param;
                             match identifiers.get(param).unwrap() {
                                 Identifier::Dynamic(_) | Identifier::Constrained(_) => {
                                     compute_fn_args.append_all(quote! {
-                                        self.#name,
+                                        self.#param,
                                     });
                                 },
                                 Identifier::External(External {
@@ -289,16 +364,44 @@ pub fn create_constrainer(input: proc_macro::TokenStream) -> proc_macro::TokenSt
                                     ..
                                 }) => {
                                     fn_args.append_all(quote! {
-                                        #name: #ty,
+                                        #param: #ty,
                                     });
                                     compute_fn_args.append_all(quote! {
-                                        #name
+                                        #param,
                                     });
-                                }
+                                },
+                                Identifier::Listener(_) => unreachable!()
                             }
                         }
                         fn_block.append_all(quote! {
                             self.#name = Self::#compute_fn_name(#compute_fn_args);
+                        });
+                    }
+                    for (_, (listener_fn_name, listener)) in to_call {
+                        let mut listener_fn_args = TokenStream::new();
+                        for param in &listener.params {
+                            match identifiers.get(param).unwrap() {
+                                Identifier::Dynamic(_) | Identifier::Constrained(_) => {
+                                    listener_fn_args.append_all(quote! {
+                                        #param,
+                                    });
+                                },
+                                Identifier::External(External {
+                                    ty,
+                                    ..
+                                }) => {
+                                    fn_args.append_all(quote! {
+                                        #param: #ty,
+                                    });
+                                    listener_fn_args.append_all(quote! {
+                                        #param,
+                                    });
+                                },
+                                Identifier::Listener(_) => unreachable!()
+                            }
+                        }
+                        fn_block.append_all(quote! {
+                            Self::#listener_fn_name(#listener_fn_args);
                         });
                     }
 
@@ -338,7 +441,7 @@ pub fn create_constrainer(input: proc_macro::TokenStream) -> proc_macro::TokenSt
         }
     });
 
-    println!("{:#}", out);
+    // println!("{:#}", out);
 
     out.into()
 }
@@ -354,6 +457,9 @@ enum ParseState {
     ConstrainedBlock(Ident, Ident, Vec<Ident>),
     ExternalName,
     ExternalType(Ident),
+    ListenerName,
+    ListenerParams(Ident),
+    ListenerBlock(Ident, Vec<Ident>),
     OpGenSet,
 }
 
@@ -362,6 +468,7 @@ enum Identifier {
     Dynamic(Dynamic),
     Constrained(Constrained),
     External(External),
+    Listener(Listener),
 }
 
 #[derive(Debug)]
@@ -376,11 +483,17 @@ struct Constrained {
     params: Vec<Ident>,
     block: TokenStream,
     compute_fn_name: Ident,
-    dependents: BTreeSet<usize>
+    dependents: BTreeSet<usize>,
 }
 
 #[derive(Debug)]
 struct External {
     ty: Ident,
     dependents: BTreeSet<usize>,
+}
+
+#[derive(Debug)]
+struct Listener {
+    params: Vec<Ident>,
+    block: TokenStream,
 }

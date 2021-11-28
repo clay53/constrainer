@@ -12,6 +12,8 @@ Variables can be retrieved by calling `.get_{name}` on an instance of your const
 
 Constraineds can also depend on other constraineds. Ensure that this is done in the order of dependencies. All operations will, by default, be performed linearly in the order they were defined.
 
+Listeners are defined as follows: `listener name (args) { listener fn body }`. Listeners are called when the variables in its arguments are updated or initialized.
+
 Note: Does not currently support referencing types outside of the current scope `std::f32` will *not* work. This feature may be implemented in a future version.
 
 Note2: Commas are currently ignored. Do not depend on this. They will become mandatory in a future version.
