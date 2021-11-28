@@ -1,4 +1,4 @@
-use constrained::create_constrainer;
+use constrainer::create_constrainer;
 
 type StaticStr = &'static str;
 create_constrainer!(Constrainer {

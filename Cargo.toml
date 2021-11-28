@@ -1,7 +1,14 @@
 [package]
-name = "constrained"
+name = "constrainer"
 version = "0.0.1"
 edition = "2021"
+authors = ["Clayton Hickey <clayton@claytondoesthings.xyz>"]
+documentation = "https://docs.rs/constrainer"
+readme = "README.md"
+homepage = "https://crates.io/crate/constrainer"
+license = "MIT"
+repository = "https://github.com/clay53/constrainer"
+description = "An attempt to bring CAD concepts of constraints to variables in order to significantly reduce redundant instructions."
 
 [lib]
 proc-macro = true

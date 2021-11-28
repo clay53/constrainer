@@ -1,4 +1,4 @@
-use constrained::create_constrainer;
+use constrainer::create_constrainer;
 
 fn compute_y(x: f32) -> f32 {
     x*10.0-1.0
