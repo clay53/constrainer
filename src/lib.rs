@@ -276,12 +276,12 @@ pub fn create_constrainer(input: proc_macro::TokenStream) -> proc_macro::TokenSt
                     }
                     let fn_name = Ident::new(&fn_name, Span::call_site());
 
-                    let mut fn_args = TokenStream::new();
+                    let mut set_fn_args = TokenStream::new();
                     let mut fn_block = TokenStream::new();
-                    fn_args.append_all(quote! { &mut self, });
+                    set_fn_args.append_all(quote! { &mut self, });
                     for (_, (name, dynamic)) in &set_dynamics {
                         let ty = &dynamic.ty;
-                        fn_args.append_all(quote! {
+                        set_fn_args.append_all(quote! {
                             #name: #ty,
                         });
                         fn_block.append_all(quote! {
@@ -349,10 +349,13 @@ pub fn create_constrainer(input: proc_macro::TokenStream) -> proc_macro::TokenSt
                         }
                     }
 
+                    let mut set_fn_external_args = BTreeMap::new();
+
                     for (_, (name, constrained)) in to_update {
                         let compute_fn_name = &constrained.compute_fn_name;
                         let mut compute_fn_args = TokenStream::new();
                         for param in &constrained.params {
+                            let param_index = identifiers.get_index_of(param).unwrap();
                             match identifiers.get(param).unwrap() {
                                 Identifier::Dynamic(_) | Identifier::Constrained(_) => {
                                     compute_fn_args.append_all(quote! {
@@ -363,7 +366,7 @@ pub fn create_constrainer(input: proc_macro::TokenStream) -> proc_macro::TokenSt
                                     ty,
                                     ..
                                 }) => {
-                                    fn_args.append_all(quote! {
+                                    set_fn_external_args.insert(param_index, quote! {
                                         #param: #ty,
                                     });
                                     compute_fn_args.append_all(quote! {
@@ -380,6 +383,7 @@ pub fn create_constrainer(input: proc_macro::TokenStream) -> proc_macro::TokenSt
                     for (_, (listener_fn_name, listener)) in to_call {
                         let mut listener_fn_args = TokenStream::new();
                         for param in &listener.params {
+                            let param_index = identifiers.get_index_of(param).unwrap();
                             match identifiers.get(param).unwrap() {
                                 Identifier::Dynamic(_) | Identifier::Constrained(_) => {
                                     listener_fn_args.append_all(quote! {
@@ -390,7 +394,7 @@ pub fn create_constrainer(input: proc_macro::TokenStream) -> proc_macro::TokenSt
                                     ty,
                                     ..
                                 }) => {
-                                    fn_args.append_all(quote! {
+                                    set_fn_external_args.insert(param_index, quote! {
                                         #param: #ty,
                                     });
                                     listener_fn_args.append_all(quote! {
@@ -405,8 +409,12 @@ pub fn create_constrainer(input: proc_macro::TokenStream) -> proc_macro::TokenSt
                         });
                     }
 
+                    for (_, set_fn_external_arg) in set_fn_external_args {
+                        set_fn_args.append_all(set_fn_external_arg);
+                    }
+
                     ops.append_all(quote! {
-                        pub fn #fn_name(#fn_args) {
+                        pub fn #fn_name(#set_fn_args) {
                             #fn_block
                         }
                     });

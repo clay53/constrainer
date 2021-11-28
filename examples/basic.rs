@@ -43,6 +43,7 @@ create_constrainer!(Constrainer {
     opgenset (x)
     opgenset (y)
     opgenset (z)
+    opgenset (y, z)
 });
 
 fn main() {
