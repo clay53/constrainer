@@ -3,6 +3,7 @@ use constrained::create_constrainer;
 create_constrainer!(Constrainer {
     dynamic x f32
     dynamic y f32
+    external ex String
     
     constrained xy f32 (x, y) {
         println!("Computing xy");
@@ -24,6 +25,10 @@ create_constrainer!(Constrainer {
         println!("Computing x2sin");
         x2.sin()
     }
+    constrained y_ex f32 (y, ex) {
+        println!("Computer yex! {}", ex);
+        y
+    }
     
     opgenset (y, x)
     opgenset (x)
@@ -32,11 +37,11 @@ create_constrainer!(Constrainer {
 
 fn main() {
     println!("Initializing");
-    let mut constrainer = Constrainer::new(3.0, 2.0);
+    let mut constrainer = Constrainer::new(3.0, 2.0, "Initial y_ex".to_string());
     println!("{:?}", constrainer);
 
     println!("\nSetting x & y");
-    constrainer.set_x_y(2.0, 4.0);
+    constrainer.set_x_y(2.0, 4.0, "y_ex when setting x & y".to_string());
     println!("{:?}", constrainer);
 
     println!("\nSetting x");
@@ -44,6 +49,6 @@ fn main() {
     println!("{:?}", constrainer);
 
     println!("\nSetting y");
-    constrainer.set_y(6.0);
+    constrainer.set_y(6.0, "y_ex when setting y".to_string());
     println!("{:?}", constrainer);
 }

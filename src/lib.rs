@@ -1,5 +1,4 @@
 use proc_macro2::{
-    Group,
     Ident,
     TokenStream,
     TokenTree,
@@ -38,6 +37,7 @@ pub fn create_constrainer(input: proc_macro::TokenStream) -> proc_macro::TokenSt
 
     let mut dynamic_fields = TokenStream::new();
     let mut constrained_fields = TokenStream::new();
+    let mut external_fields = TokenStream::new();
     let mut deliminated_dynamics = TokenStream::new();
     let mut deliminated_constraineds = TokenStream::new();
     let mut init_constraineds = TokenStream::new();
@@ -49,6 +49,7 @@ pub fn create_constrainer(input: proc_macro::TokenStream) -> proc_macro::TokenSt
             ParseState::Key => match token {
                 TokenTree::Ident(ident) if ident.to_string().as_str() == "dynamic" => parse_state = ParseState::DynamicName,
                 TokenTree::Ident(ident) if ident.to_string().as_str() == "constrained" => parse_state = ParseState::ConstrainedName,
+                TokenTree::Ident(ident) if ident.to_string().as_str() == "external" => parse_state = ParseState::ExternalName,
                 TokenTree::Ident(ident) if ident.to_string().as_str() == "opgenset" => parse_state = ParseState::OpGenSet,
                 _ => panic!("Unexpected token: {}", token)
             },
@@ -114,6 +115,9 @@ pub fn create_constrainer(input: proc_macro::TokenStream) -> proc_macro::TokenSt
                             Identifier::Constrained(constrained) => {
                                 constrained.dependents.insert(index);
                             }
+                            Identifier::External(external) => {
+                                external.dependents.insert(index);
+                            }
                         }
                     }
 
@@ -137,6 +141,7 @@ pub fn create_constrainer(input: proc_macro::TokenStream) -> proc_macro::TokenSt
                         let ty = match identifiers.get(param).unwrap() {
                             Identifier::Dynamic(dynamic) => &dynamic.ty,
                             Identifier::Constrained(constrained) => &constrained.ty,
+                            Identifier::External(external) => &external.ty,
                         };
                         compute_args.append_all(quote! {
                             #param: #ty,
@@ -155,6 +160,26 @@ pub fn create_constrainer(input: proc_macro::TokenStream) -> proc_macro::TokenSt
                         params,
                         block,
                         compute_fn_name,
+                        dependents: BTreeSet::new(),
+                    }));
+                    parse_state = ParseState::Key;
+                },
+                _ => panic!("Unexpected token: {}", token)
+            },
+            ParseState::ExternalName => match token {
+                TokenTree::Ident(name) => parse_state = ParseState::ExternalType(name),
+                _ => panic!("Unexpected token: {}", token)
+            },
+            ParseState::ExternalType(name) => match token {
+                TokenTree::Ident(ty) => {
+                    external_fields.append_all(quote! {
+                        #name: #ty,
+                    });
+                    // deliminated_externals.append_all(quote! {
+                    //     #name,
+                    // });
+                    identifiers.insert(name, Identifier::External(External {
+                        ty,
                         dependents: BTreeSet::new(),
                     }));
                     parse_state = ParseState::Key;
@@ -250,15 +275,30 @@ pub fn create_constrainer(input: proc_macro::TokenStream) -> proc_macro::TokenSt
 
                     for (_, (name, constrained)) in &to_update {
                         let compute_fn_name = &constrained.compute_fn_name;
-                        let mut fn_args = TokenStream::new();
+                        let mut compute_fn_args = TokenStream::new();
                         for param in &constrained.params {
                             let name = &param;
-                            fn_args.append_all(quote! {
-                                self.#name,
-                            });
+                            match identifiers.get(param).unwrap() {
+                                Identifier::Dynamic(_) | Identifier::Constrained(_) => {
+                                    compute_fn_args.append_all(quote! {
+                                        self.#name,
+                                    });
+                                },
+                                Identifier::External(External {
+                                    ty,
+                                    ..
+                                }) => {
+                                    fn_args.append_all(quote! {
+                                        #name: #ty,
+                                    });
+                                    compute_fn_args.append_all(quote! {
+                                        #name
+                                    });
+                                }
+                            }
                         }
                         fn_block.append_all(quote! {
-                            self.#name = Self::#compute_fn_name(#fn_args);
+                            self.#name = Self::#compute_fn_name(#compute_fn_args);
                         });
                     }
 
@@ -283,25 +323,27 @@ pub fn create_constrainer(input: proc_macro::TokenStream) -> proc_macro::TokenSt
             #dynamic_fields
             #constrained_fields
         }
-    });
 
-    out.append_all(quote! { impl #name });
+        impl #name {
+            pub fn new ( #dynamic_fields #external_fields ) -> Self {
+                #init_constraineds
 
-    ops.append_all(quote! { pub fn new ( #dynamic_fields ) -> Self {
-        #init_constraineds
+                Self {
+                    #deliminated_dynamics
+                    #deliminated_constraineds
+                }
+            }
 
-        Self {
-            #deliminated_dynamics
-            #deliminated_constraineds
+            #ops
         }
-    } });
-    out.append(Group::new(Delimiter::Brace, ops));
+    });
 
     println!("{:#}", out);
 
     out.into()
 }
 
+#[derive(Debug)]
 enum ParseState {
     Key,
     DynamicName,
@@ -310,14 +352,19 @@ enum ParseState {
     ConstrainedType(Ident),
     ConstrainedParams(Ident, Ident),
     ConstrainedBlock(Ident, Ident, Vec<Ident>),
+    ExternalName,
+    ExternalType(Ident),
     OpGenSet,
 }
 
+#[derive(Debug)]
 enum Identifier {
     Dynamic(Dynamic),
     Constrained(Constrained),
+    External(External),
 }
 
+#[derive(Debug)]
 struct Dynamic {
     ty: Ident,
     dependents: BTreeSet<usize>,
@@ -330,4 +377,10 @@ struct Constrained {
     block: TokenStream,
     compute_fn_name: Ident,
     dependents: BTreeSet<usize>
+}
+
+#[derive(Debug)]
+struct External {
+    ty: Ident,
+    dependents: BTreeSet<usize>,
 }
