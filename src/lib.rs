@@ -3,7 +3,7 @@ use proc_macro2::{
     TokenStream,
     TokenTree,
     Delimiter,
-    Span
+    Span,
 };
 use quote::{
     TokenStreamExt,
@@ -188,14 +188,7 @@ pub fn create_constrainer(input: proc_macro::TokenStream) -> proc_macro::TokenSt
             },
             ParseState::ListenerParams(name) => match token {
                 TokenTree::Group(group) if group.delimiter() == Delimiter::Parenthesis => {
-                    let mut params = Vec::new();
-                    for token in group.stream() {
-                        match token {
-                            TokenTree::Punct(punct) if punct.as_char() == ',' => {}, // TODO: Remove >1 comma, no comma, and leading comma
-                            TokenTree::Ident(param) => params.push(param),
-                            _ => panic!("Unexpected token: {}", token)
-                        }
-                    }
+                    let params = Param::parse_params(group.stream());
                     parse_state = ParseState::ListenerBlock(name, params);
                 },
                 _ => panic!("Unexpected token: {}", token)
@@ -206,7 +199,8 @@ pub fn create_constrainer(input: proc_macro::TokenStream) -> proc_macro::TokenSt
                     let mut listener_args = TokenStream::new();
                     let mut init_args = TokenStream::new();
                     for param in &params {
-                        let identifier = identifiers.get_mut(param).unwrap();
+                        let param_name = &param.name;
+                        let identifier = identifiers.get_mut(param_name).unwrap();
                         let param_ty = match identifier {
                             Identifier::Dynamic(dynamic) => {
                                 dynamic.dependents.insert(index);
@@ -224,12 +218,21 @@ pub fn create_constrainer(input: proc_macro::TokenStream) -> proc_macro::TokenSt
                                 panic!("A listener cannot depend on a listener.");
                             },
                         };
-                        listener_args.append_all(quote! {
-                            #param: #param_ty,
-                        });
-                        init_args.append_all(quote! {
-                            #param,
-                        });
+                        if param.is_ref {
+                            listener_args.append_all(quote! {
+                                #param_name: &#param_ty,
+                            });
+                            init_args.append_all(quote! {
+                                &#param_name,
+                            });
+                        } else {
+                            listener_args.append_all(quote! {
+                                #param_name: #param_ty,
+                            });
+                            init_args.append_all(quote! {
+                                #param_name,
+                            });
+                        }
                     }
 
                     init_constraineds.append_all(quote! {
@@ -383,23 +386,40 @@ pub fn create_constrainer(input: proc_macro::TokenStream) -> proc_macro::TokenSt
                     for (_, (listener_fn_name, listener)) in to_call {
                         let mut listener_fn_args = TokenStream::new();
                         for param in &listener.params {
-                            let param_index = identifiers.get_index_of(param).unwrap();
-                            match identifiers.get(param).unwrap() {
+                            let param_name = &param.name;
+                            let param_index = identifiers.get_index_of(param_name).unwrap();
+                            match identifiers.get(param_name).unwrap() {
                                 Identifier::Dynamic(_) | Identifier::Constrained(_) => {
-                                    listener_fn_args.append_all(quote! {
-                                        #param,
-                                    });
+                                    listener_fn_args.append_all(
+                                        if param.is_ref {
+                                            quote! {
+                                                &self.#param_name,
+                                            }
+                                        } else {
+                                            quote! {
+                                                self.#param_name,
+                                            }
+                                        }
+                                    );
                                 },
                                 Identifier::External(External {
                                     ty,
                                     ..
                                 }) => {
                                     set_fn_external_args.insert(param_index, quote! {
-                                        #param: #ty,
+                                        #param_name: #ty,
                                     });
-                                    listener_fn_args.append_all(quote! {
-                                        #param,
-                                    });
+                                    listener_fn_args.append_all(
+                                        if param.is_ref {
+                                            quote! {
+                                                &#param_name,
+                                            }
+                                        } else {
+                                            quote! {
+                                                #param_name,
+                                            }
+                                        }
+                                    );
                                 },
                                 Identifier::Listener(_) => unreachable!()
                             }
@@ -467,7 +487,7 @@ enum ParseState {
     ExternalType(Ident),
     ListenerName,
     ListenerParams(Ident),
-    ListenerBlock(Ident, Vec<Ident>),
+    ListenerBlock(Ident, Vec<Param>),
     OpGenSet,
 }
 
@@ -483,6 +503,34 @@ enum Identifier {
 struct Dynamic {
     ty: Ident,
     dependents: BTreeSet<usize>,
+}
+
+#[derive(Debug)]
+struct Param {
+    name: Ident,
+    is_ref: bool,
+}
+
+impl Param {
+    fn parse_params(token_stream: TokenStream) -> Vec<Param> {
+        let mut params = Vec::new();
+        let mut is_ref = false;
+        for token in token_stream {
+            match token {
+                TokenTree::Punct(punct) if punct.as_char() == ',' => {}, // TODO: Remove >1 comma, no comma, and leading comma
+                TokenTree::Punct(punct) if punct.as_char() == '&' => is_ref = true,
+                TokenTree::Ident(name) => {
+                    params.push(Param {
+                        name,
+                        is_ref,
+                    });
+                    is_ref = false;
+                },
+                _ => panic!("Unexpected token: {}", token)
+            }
+        }
+        params
+    }
 }
 
 #[derive(Debug)]
@@ -502,6 +550,6 @@ struct External {
 
 #[derive(Debug)]
 struct Listener {
-    params: Vec<Ident>,
+    params: Vec<Param>,
     block: TokenStream,
 }
